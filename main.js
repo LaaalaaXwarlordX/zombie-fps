@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { SkeletonUtils } from "three/addons/utils/SkeletonUtils.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -238,8 +238,6 @@ function despawnZombie(z) {
 
 function loadZombieModel() {
   const loader = new GLTFLoader();
-
-  // Free animated model for testing pipeline
   const url = "https://threejs.org/examples/models/gltf/Soldier.glb";
 
   return new Promise((resolve, reject) => {
