@@ -6,22 +6,26 @@ import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 const healthEl = document.getElementById("health");
 const infoEl = document.getElementById("info");
 
-// prevent right-click menu (RMB ADS)
 addEventListener("contextmenu", (e) => e.preventDefault());
+
+// Make sure body can receive keyboard focus
+document.body.tabIndex = 0;
+document.body.style.outline = "none";
 
 // ---------------- SETTINGS ----------------
 const MAP_HALF = 160;
 const GROUND_SIZE = 1100;
-
 const PLAYER_RADIUS = 0.65;
 
 const BASE_FOV = 75;
 const ADS_FOV = 55;
 
-const MAX_ENEMIES = 18;      // cap = less lag
-const MAX_TRACERS = 20;
+// performance caps (prevents lag -> “stops responding”)
+const MAX_ENEMIES = 16;
+const MAX_TRACERS = 18;
 
-const ENEMY_VISUAL_Y_FIX = Math.PI; // fixes Soldier facing (no moonwalk)
+// Soldier model faces the “wrong” direction for lookAt, so rotate VISUAL once:
+const ENEMY_VISUAL_Y_FIX = Math.PI;
 
 // ---------------- SCENE ----------------
 const scene = new THREE.Scene();
@@ -40,13 +44,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 document.body.appendChild(renderer.domElement);
 
-// lights (keep simple for stability)
+// simple lights (stable)
 scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.0));
 const sun = new THREE.DirectionalLight(0xffffff, 0.8);
 sun.position.set(60, 80, 30);
 scene.add(sun);
 
-// ---------------- WORLD (wide map + cover + collision) ----------------
+// ---------------- MAP + COLLISION ----------------
 const obstacles = [];
 const obstacleBoxes = [];
 
@@ -69,23 +73,23 @@ function registerObstacle(mesh) {
 }
 
 function addBox(x, z, w, h, d, color = 0x3b4450) {
-  const box = new THREE.Mesh(
+  const b = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
     new THREE.MeshStandardMaterial({ color, roughness: 0.92 })
   );
-  box.position.set(x, h / 2, z);
-  scene.add(box);
-  registerObstacle(box);
-  return box;
+  b.position.set(x, h / 2, z);
+  scene.add(b);
+  registerObstacle(b);
+  return b;
 }
 
-// boundary walls
+// boundary
 addBox(0, -MAP_HALF - 8, MAP_HALF * 2 + 40, 12, 2);
 addBox(0,  MAP_HALF + 8, MAP_HALF * 2 + 40, 12, 2);
 addBox(-MAP_HALF - 8, 0, 2, 12, MAP_HALF * 2 + 40);
 addBox( MAP_HALF + 8, 0, 2, 12, MAP_HALF * 2 + 40);
 
-// cover blocks (simple “Valorant vibe”)
+// cover
 addBox(0, 0, 18, 5, 12, 0x46515f);
 addBox(-40, 22, 12, 7, 18, 0x4a5563);
 addBox(45, -26, 18, 5, 12, 0x4a5563);
@@ -93,8 +97,6 @@ addBox(65, 48, 12, 9, 22, 0x3f4a56);
 addBox(-70, -45, 18, 5, 18, 0x3f4a56);
 addBox(15, 70, 24, 5, 12, 0x46515f);
 addBox(-20, -78, 26, 5, 14, 0x46515f);
-addBox(95, 0, 12, 10, 28, 0x3f4a56);
-addBox(-95, 0, 12, 10, 28, 0x3f4a56);
 
 function collidesAt(x, z) {
   for (const b of obstacleBoxes) {
@@ -107,36 +109,42 @@ function collidesAt(x, z) {
   return false;
 }
 
-// ---------------- CONTROLS ----------------
+// ---------------- POINTER LOCK ----------------
 const controls = new PointerLockControls(camera, document.body);
 
 controls.addEventListener("lock", () => {
-  infoEl.textContent = "WASD • SHIFT sprint • RMB ADS • 1/2/3 guns • R reload";
+  document.body.focus(); // IMPORTANT: fixes “mouse works, keys don’t”
+  infoEl.textContent = "WASD move • SHIFT sprint • RMB ADS • 1/2/3 guns • R reload";
 });
+
 controls.addEventListener("unlock", () => {
   infoEl.textContent = "CLICK TO PLAY (mouse unlocked)";
   firing = false;
   ads = false;
 });
 
-addEventListener("click", () => {
+document.addEventListener("click", () => {
   if (!controls.isLocked) controls.lock();
 });
 
-// ---------------- INPUT ----------------
+// ---------------- INPUT (document listeners = more reliable) ----------------
 const keys = { w:false, a:false, s:false, d:false, shift:false, ctrl:false };
-
+let jumpBuffer = 0;
 let firing = false;
 let ads = false;
-let jumpBuffer = 0;
 
-addEventListener("keydown", (e) => {
+document.addEventListener("keydown", (e) => {
+  // prevent page from scrolling on space
+  if (e.code === "Space") e.preventDefault();
+
   if (e.code === "KeyW") keys.w = true;
   if (e.code === "KeyA") keys.a = true;
   if (e.code === "KeyS") keys.s = true;
   if (e.code === "KeyD") keys.d = true;
-  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = true; // sprint
+
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = true;
   if (e.code === "ControlLeft" || e.code === "ControlRight") keys.ctrl = true;
+
   if (e.code === "Space") jumpBuffer = 0.12;
 
   if (e.code === "Digit1") setWeapon("ak");
@@ -145,32 +153,37 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyR") tryReload();
 });
 
-addEventListener("keyup", (e) => {
+document.addEventListener("keyup", (e) => {
   if (e.code === "KeyW") keys.w = false;
   if (e.code === "KeyA") keys.a = false;
   if (e.code === "KeyS") keys.s = false;
   if (e.code === "KeyD") keys.d = false;
+
   if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = false;
   if (e.code === "ControlLeft" || e.code === "ControlRight") keys.ctrl = false;
 });
 
-addEventListener("mousedown", (e) => {
-  if (e.button === 0) { // LMB
+// Reset keys if you alt-tab (prevents “stuck” movement)
+addEventListener("blur", () => {
+  for (const k in keys) keys[k] = false;
+  firing = false;
+  ads = false;
+});
+
+document.addEventListener("mousedown", (e) => {
+  if (e.button === 0) {
     firing = true;
     if (weapon.fireMode === "semi") tryFire();
   }
-  if (e.button === 2) { // RMB
-    ads = true;
-  }
+  if (e.button === 2) ads = true;
 });
-addEventListener("mouseup", (e) => {
+document.addEventListener("mouseup", (e) => {
   if (e.button === 0) firing = false;
   if (e.button === 2) ads = false;
 });
 
 // ---------------- MOVEMENT ----------------
 const clock = new THREE.Clock();
-
 const vel = new THREE.Vector3(0, 0, 0);
 let velY = 0;
 let feetY = 0;
@@ -187,7 +200,7 @@ const GRAVITY = 18.0;
 const JUMP_SPEED = 6.2;
 
 const WALK_SPEED = 5.3;
-const SPRINT_SPEED = 8.2; // SHIFT sprint
+const SPRINT_SPEED = 8.2;
 const CROUCH_SPEED = 3.0;
 
 const GROUND_ACCEL = 55.0;
@@ -264,7 +277,6 @@ function updatePlayer(dt) {
   if (grounded) applyFriction(dt);
   accelerate(dt, grounded ? GROUND_ACCEL : AIR_ACCEL, maxSpeed);
 
-  // axis collision so you don't get stuck inside blocks
   const oldX = camera.position.x;
   camera.position.x += vel.x * dt;
   if (collidesAt(camera.position.x, camera.position.z)) {
@@ -288,7 +300,6 @@ function updatePlayer(dt) {
   eyeHeight = THREE.MathUtils.lerp(eyeHeight, targetEye, 1 - Math.pow(0.001, dt));
   camera.position.y = feetY + eyeHeight;
 
-  // ADS zoom
   const targetFov = ads ? ADS_FOV : BASE_FOV;
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.pow(0.001, dt));
   camera.updateProjectionMatrix();
@@ -303,7 +314,6 @@ const WEAPONS = {
 
 let weaponId = "ak";
 let weapon = WEAPONS[weaponId];
-
 let ammoInMag = weapon.magSize;
 let ammoReserve = weapon.reserveMax;
 
@@ -348,13 +358,11 @@ function secondsPerShot(w) { return 60 / w.rpm; }
 function tryFire() {
   if (!controls.isLocked) return;
   if (reloading) return;
-
   if (ammoInMag <= 0) { tryReload(); return; }
   if (nextShot > 0) return;
 
   ammoInMag -= 1;
   nextShot = secondsPerShot(weapon);
-
   fireHitscan(weapon);
 }
 
@@ -365,18 +373,15 @@ function updateFiring(dt) {
   }
 }
 
-// ---------------- GUN VISUAL (always present) ----------------
+// simple gun visible
 let gun = null;
-
 function buildGun() {
   if (gun) camera.remove(gun);
   gun = new THREE.Group();
 
   const mat = new THREE.MeshStandardMaterial({ color: 0x1e232b, roughness: 0.65, metalness: 0.25 });
   const accent = new THREE.MeshStandardMaterial({
-    color: weaponId === "magnum" ? 0xffd24a : (weaponId === "sg" ? 0x55ffaa : 0x3b5bff),
-    roughness: 0.6,
-    metalness: 0.2
+    color: weaponId === "magnum" ? 0xffd24a : (weaponId === "sg" ? 0x55ffaa : 0x3b5bff)
   });
 
   let bodyZ = 0.55, barrelZ = 0.60;
@@ -401,9 +406,8 @@ function buildGun() {
 }
 buildGun();
 
-// ---------------- ENEMIES (pistols that shoot) ----------------
+// ---------------- ENEMIES ----------------
 const raycaster = new THREE.Raycaster();
-
 let soldierTemplate = null;
 let soldierClips = null;
 
@@ -420,11 +424,10 @@ function findClip(clips, names) {
 }
 
 function makeEnemy(opts) {
-  // root group so we can rotate VISUAL only once (fix facing)
   const root = new THREE.Group();
 
   const visual = SkeletonUtils.clone(soldierTemplate);
-  visual.rotation.y = ENEMY_VISUAL_Y_FIX;
+  visual.rotation.y = ENEMY_VISUAL_Y_FIX; // fixes facing once
   root.add(visual);
 
   const collider = new THREE.Mesh(
@@ -434,7 +437,6 @@ function makeEnemy(opts) {
   collider.position.set(0, 1.1, 0);
   root.add(collider);
 
-  // pistol prop
   const pistol = new THREE.Mesh(
     new THREE.BoxGeometry(0.12, 0.06, 0.20),
     new THREE.MeshStandardMaterial({ color: 0x1d222a, roughness: 0.7, metalness: 0.3 })
@@ -450,7 +452,6 @@ function makeEnemy(opts) {
 
   const e = {
     root,
-    visual,
     collider,
     mixer,
     hp: opts.hp ?? 10,
@@ -458,10 +459,9 @@ function makeEnemy(opts) {
     isBoss: !!opts.isBoss,
     shootEvery: opts.shootEvery ?? 1.0,
     shootCD: 0.4 + Math.random() * 0.7,
-    shootRange: opts.shootRange ?? 70,
+    shootRange: opts.shootRange ?? 80,
     damage: opts.damage ?? 6
   };
-
   collider.userData.owner = e;
 
   scene.add(root);
@@ -479,18 +479,16 @@ function clearEnemies() {
 function spawnWave() {
   clearEnemies();
 
-  // boss
   const boss = makeEnemy({
     isBoss: true,
     hp: 70 + wave * 14,
     speed: 1.8 + wave * 0.02,
     shootEvery: Math.max(0.35, 0.75 - wave * 0.02),
-    shootRange: 95,
+    shootRange: 110,
     damage: 9
   });
   boss.root.position.set(0, 0, -110);
 
-  // minions
   const minCount = Math.min(10, 6 + Math.floor(wave / 2));
   for (let i = 0; i < minCount; i++) {
     const a = Math.random() * Math.PI * 2;
@@ -499,13 +497,12 @@ function spawnWave() {
       hp: 12 + Math.floor(wave / 2),
       speed: 2.5 + wave * 0.02,
       shootEvery: Math.max(0.6, 1.15 - wave * 0.03),
-      shootRange: 80,
+      shootRange: 95,
       damage: 6
     });
     m.root.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
   }
 
-  // cap enemies
   while (enemies.length > MAX_ENEMIES) {
     const e = enemies.pop();
     scene.remove(e.root);
@@ -525,7 +522,7 @@ function hasLineOfSight(from, to) {
   return hits[0].distance > dist - 0.2;
 }
 
-// tracers pool
+// tracer pool
 const tracers = [];
 function makeTracer() {
   const geo = new THREE.BufferGeometry();
@@ -565,7 +562,6 @@ function updateEnemies(dt) {
   for (const e of enemies) {
     e.mixer.update(dt);
 
-    // move toward player to “fight distance”
     const toPlayer = new THREE.Vector3(
       camera.position.x - e.root.position.x,
       0,
@@ -577,14 +573,14 @@ function updateEnemies(dt) {
     const stop = e.isBoss ? 55 : 40;
     if (dist > stop) e.root.position.addScaledVector(toPlayer, e.speed * dt);
 
-    // face player (visual already fixed)
+    // face player (no moonwalk because visual is fixed)
     e.root.lookAt(camera.position.x, e.root.position.y, camera.position.z);
 
-    // shoot
     e.shootCD = Math.max(0, e.shootCD - dt);
     if (e.shootCD === 0 && dist < e.shootRange) {
       const muzzle = new THREE.Vector3(e.root.position.x, 1.2, e.root.position.z);
       const target = camera.position.clone();
+
       if (hasLineOfSight(muzzle, target)) {
         showTracer(muzzle, target, e.isBoss ? 0xff6b6b : 0xffc46b);
         playerHP = Math.max(0, playerHP - e.damage);
@@ -596,7 +592,6 @@ function updateEnemies(dt) {
     e.root.position.z = THREE.MathUtils.clamp(e.root.position.z, -MAP_HALF, MAP_HALF);
   }
 
-  // wave progression (no instant looping)
   const bossAlive = enemies.some((x) => x.isBoss);
   if (!bossAlive) {
     waveCooldown = Math.max(0, waveCooldown - dt);
@@ -610,13 +605,13 @@ function updateEnemies(dt) {
   }
 }
 
-// ---------------- PLAYER HITS (raycast) ----------------
+// ---------------- PLAYER SHOOT ----------------
 function randSpread(s) { return (Math.random() * 2 - 1) * s; }
 
 function fireHitscan(w) {
   const colliders = enemies.map((e) => e.collider);
-
   const origin = camera.position.clone();
+
   const baseDir = new THREE.Vector3();
   camera.getWorldDirection(baseDir);
 
@@ -638,7 +633,6 @@ function fireHitscan(w) {
     if (!target) continue;
 
     target.hp -= w.damage;
-
     if (target.hp <= 0) {
       const idx = enemies.indexOf(target);
       if (idx !== -1) enemies.splice(idx, 1);
@@ -647,7 +641,7 @@ function fireHitscan(w) {
   }
 }
 
-// ---------------- LOAD MODEL ----------------
+// ---------------- LOAD ----------------
 function loadGLB(url) {
   const loader = new GLTFLoader();
   return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
@@ -670,7 +664,7 @@ loadGLB("https://threejs.org/examples/models/gltf/Soldier.glb")
     infoEl.textContent = "Model load failed. Open Console (F12).";
   });
 
-// ---------------- LOOP (with crash guard) ----------------
+// ---------------- LOOP ----------------
 function updateHUD() {
   const adsText = ads ? " ADS" : "";
   const reloadText = reloading ? " (reloading)" : "";
@@ -696,12 +690,11 @@ function animate() {
     renderer.render(scene, camera);
   } catch (err) {
     console.error("GAME LOOP CRASH:", err);
-    infoEl.textContent = "Crashed. Open Console (F12) and copy the red error.";
+    infoEl.textContent = "Crashed. Open Console (F12) and paste the red error.";
   }
 }
 animate();
 
-// ---------------- RESIZE ----------------
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
