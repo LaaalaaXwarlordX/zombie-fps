@@ -3,39 +3,30 @@ import { PointerLockControls } from "three/addons/controls/PointerLockControls.j
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
-
 const healthEl = document.getElementById("health");
 const infoEl = document.getElementById("info");
 
-// stop browser right-click menu so RMB can ADS
+// prevent right-click menu (RMB ADS)
 addEventListener("contextmenu", (e) => e.preventDefault());
 
-// ---------------- MAP ----------------
-const MAP_HALF = 140;
-const GROUND_SIZE = 900;
+// ---------------- SETTINGS ----------------
+const MAP_HALF = 160;
+const GROUND_SIZE = 1100;
 
-// collision
 const PLAYER_RADIUS = 0.65;
 
-// enemy facing fix (if they still face wrong, set to 0 and commit)
-const ENEMY_Y_FIX = Math.PI;
+const BASE_FOV = 75;
+const ADS_FOV = 55;
 
-// caps to prevent lag -> freeze
-const MAX_ENEMIES = 22;
-const MAX_TRACERS = 25;
+const MAX_ENEMIES = 18;      // cap = less lag
+const MAX_TRACERS = 20;
+
+const ENEMY_VISUAL_Y_FIX = Math.PI; // fixes Soldier facing (no moonwalk)
 
 // ---------------- SCENE ----------------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
-scene.fog = new THREE.Fog(0x0b0f14, 40, 320);
-
-const BASE_FOV = 75;
-const ADS_FOV = 55;
+scene.fog = new THREE.Fog(0x0b0f14, 45, 340);
 
 const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth / innerHeight, 0.1, 2000);
 camera.position.set(0, 1.6, 40);
@@ -44,36 +35,18 @@ scene.add(camera);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-document.body.appendChild(renderer.domElement);
-
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
 
-// keep it lighter than bloom builds (less lag)
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const fxaaPass = new ShaderPass(FXAAShader);
-function updateFXAA() {
-  const pr = renderer.getPixelRatio();
-  fxaaPass.material.uniforms["resolution"].value.set(
-    1 / (innerWidth * pr),
-    1 / (innerHeight * pr)
-  );
-}
-updateFXAA();
-composer.addPass(fxaaPass);
+// lights (keep simple for stability)
+scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(60, 80, 30);
+scene.add(sun);
 
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-
-// ---------------- LIGHTS ----------------
-scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 0.9));
-const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-dir.position.set(60, 80, 30);
-scene.add(dir);
-
-// ---------------- WORLD ----------------
+// ---------------- WORLD (wide map + cover + collision) ----------------
 const obstacles = [];
 const obstacleBoxes = [];
 
@@ -112,7 +85,7 @@ addBox(0,  MAP_HALF + 8, MAP_HALF * 2 + 40, 12, 2);
 addBox(-MAP_HALF - 8, 0, 2, 12, MAP_HALF * 2 + 40);
 addBox( MAP_HALF + 8, 0, 2, 12, MAP_HALF * 2 + 40);
 
-// simple cover
+// cover blocks (simple “Valorant vibe”)
 addBox(0, 0, 18, 5, 12, 0x46515f);
 addBox(-40, 22, 12, 7, 18, 0x4a5563);
 addBox(45, -26, 18, 5, 12, 0x4a5563);
@@ -120,8 +93,9 @@ addBox(65, 48, 12, 9, 22, 0x3f4a56);
 addBox(-70, -45, 18, 5, 18, 0x3f4a56);
 addBox(15, 70, 24, 5, 12, 0x46515f);
 addBox(-20, -78, 26, 5, 14, 0x46515f);
+addBox(95, 0, 12, 10, 28, 0x3f4a56);
+addBox(-95, 0, 12, 10, 28, 0x3f4a56);
 
-// collision check
 function collidesAt(x, z) {
   for (const b of obstacleBoxes) {
     const minX = b.minX - PLAYER_RADIUS;
@@ -141,6 +115,8 @@ controls.addEventListener("lock", () => {
 });
 controls.addEventListener("unlock", () => {
   infoEl.textContent = "CLICK TO PLAY (mouse unlocked)";
+  firing = false;
+  ads = false;
 });
 
 addEventListener("click", () => {
@@ -148,7 +124,8 @@ addEventListener("click", () => {
 });
 
 // ---------------- INPUT ----------------
-const keys = { w:false,a:false,s:false,d:false, shift:false, ctrl:false };
+const keys = { w:false, a:false, s:false, d:false, shift:false, ctrl:false };
+
 let firing = false;
 let ads = false;
 let jumpBuffer = 0;
@@ -158,7 +135,7 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyA") keys.a = true;
   if (e.code === "KeyS") keys.s = true;
   if (e.code === "KeyD") keys.d = true;
-  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = true;
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.shift = true; // sprint
   if (e.code === "ControlLeft" || e.code === "ControlRight") keys.ctrl = true;
   if (e.code === "Space") jumpBuffer = 0.12;
 
@@ -178,19 +155,22 @@ addEventListener("keyup", (e) => {
 });
 
 addEventListener("mousedown", (e) => {
-  if (e.button === 0) {
+  if (e.button === 0) { // LMB
     firing = true;
     if (weapon.fireMode === "semi") tryFire();
   }
-  if (e.button === 2) ads = true;
+  if (e.button === 2) { // RMB
+    ads = true;
+  }
 });
 addEventListener("mouseup", (e) => {
   if (e.button === 0) firing = false;
   if (e.button === 2) ads = false;
 });
 
-// ---------------- MOVE ----------------
+// ---------------- MOVEMENT ----------------
 const clock = new THREE.Clock();
+
 const vel = new THREE.Vector3(0, 0, 0);
 let velY = 0;
 let feetY = 0;
@@ -227,6 +207,7 @@ function applyFriction(dt) {
   vel.x *= scale;
   vel.z *= scale;
 }
+
 function accelerate(dt, accel, maxSpeed) {
   const current = vel.x * wishDir.x + vel.z * wishDir.z;
   const add = maxSpeed - current;
@@ -236,6 +217,7 @@ function accelerate(dt, accel, maxSpeed) {
   vel.x += wishDir.x * amt;
   vel.z += wishDir.z * amt;
 }
+
 function getMoveSpeed() {
   if (keys.ctrl) return CROUCH_SPEED;
   return keys.shift ? SPRINT_SPEED : WALK_SPEED;
@@ -245,7 +227,8 @@ function updatePlayer(dt) {
   if (!controls.isLocked) return;
 
   camera.getWorldDirection(forward);
-  forward.y = 0; forward.normalize();
+  forward.y = 0;
+  forward.normalize();
   right.crossVectors(forward, up).normalize();
 
   wishDir.set(0, 0, 0);
@@ -281,7 +264,7 @@ function updatePlayer(dt) {
   if (grounded) applyFriction(dt);
   accelerate(dt, grounded ? GROUND_ACCEL : AIR_ACCEL, maxSpeed);
 
-  // axis collision
+  // axis collision so you don't get stuck inside blocks
   const oldX = camera.position.x;
   camera.position.x += vel.x * dt;
   if (collidesAt(camera.position.x, camera.position.z)) {
@@ -320,6 +303,7 @@ const WEAPONS = {
 
 let weaponId = "ak";
 let weapon = WEAPONS[weaponId];
+
 let ammoInMag = weapon.magSize;
 let ammoReserve = weapon.reserveMax;
 
@@ -336,7 +320,7 @@ function setWeapon(id) {
   reloading = false;
   reloadT = 0;
   nextShot = 0;
-  buildGunForWeapon();
+  buildGun();
 }
 
 function tryReload() {
@@ -346,6 +330,7 @@ function tryReload() {
   reloading = true;
   reloadT = weapon.reloadTime;
 }
+
 function updateReload(dt) {
   if (!reloading) return;
   reloadT -= dt;
@@ -357,16 +342,19 @@ function updateReload(dt) {
   ammoInMag += take;
   ammoReserve -= take;
 }
+
 function secondsPerShot(w) { return 60 / w.rpm; }
 
 function tryFire() {
   if (!controls.isLocked) return;
   if (reloading) return;
+
   if (ammoInMag <= 0) { tryReload(); return; }
   if (nextShot > 0) return;
 
   ammoInMag -= 1;
   nextShot = secondsPerShot(weapon);
+
   fireHitscan(weapon);
 }
 
@@ -377,14 +365,19 @@ function updateFiring(dt) {
   }
 }
 
-// ---------------- SIMPLE PLAYER GUN (visible) ----------------
-let gunGroup = null;
-function buildGunForWeapon() {
-  if (gunGroup) camera.remove(gunGroup);
+// ---------------- GUN VISUAL (always present) ----------------
+let gun = null;
 
-  gunGroup = new THREE.Group();
+function buildGun() {
+  if (gun) camera.remove(gun);
+  gun = new THREE.Group();
+
   const mat = new THREE.MeshStandardMaterial({ color: 0x1e232b, roughness: 0.65, metalness: 0.25 });
-  const accent = new THREE.MeshStandardMaterial({ color: weaponId === "magnum" ? 0xffd24a : (weaponId === "sg" ? 0x55ffaa : 0x3b5bff) });
+  const accent = new THREE.MeshStandardMaterial({
+    color: weaponId === "magnum" ? 0xffd24a : (weaponId === "sg" ? 0x55ffaa : 0x3b5bff),
+    roughness: 0.6,
+    metalness: 0.2
+  });
 
   let bodyZ = 0.55, barrelZ = 0.60;
   if (weaponId === "magnum") { bodyZ = 0.35; barrelZ = 0.32; }
@@ -392,43 +385,47 @@ function buildGunForWeapon() {
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.14, bodyZ), mat);
   body.position.set(0.05, -0.05, -0.20);
-  gunGroup.add(body);
+  gun.add(body);
 
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, barrelZ, 16), mat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0.12, 0.02, -0.55);
-  gunGroup.add(barrel);
+  gun.add(barrel);
 
   const rail = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.22), accent);
   rail.position.set(0.06, 0.08, -0.20);
-  gunGroup.add(rail);
+  gun.add(rail);
 
-  gunGroup.position.set(0.36, -0.35, -0.75);
-  camera.add(gunGroup);
+  gun.position.set(0.36, -0.35, -0.75);
+  camera.add(gun);
 }
-buildGunForWeapon();
+buildGun();
 
-// ---------------- ENEMIES (pistols) ----------------
+// ---------------- ENEMIES (pistols that shoot) ----------------
 const raycaster = new THREE.Raycaster();
+
 let soldierTemplate = null;
 let soldierClips = null;
 
 const enemies = [];
 let wave = 1;
-let nextWaveIn = 0;
+let waveCooldown = 2.5;
 
-function findClip(clips, wantedNames) {
-  if (!clips) return null;
-  for (const name of wantedNames) {
-    const c = THREE.AnimationClip.findByName(clips, name);
+function findClip(clips, names) {
+  for (const n of names) {
+    const c = THREE.AnimationClip.findByName(clips, n);
     if (c) return c;
   }
-  return clips[0] || null;
+  return null;
 }
 
 function makeEnemy(opts) {
-  const root = SkeletonUtils.clone(soldierTemplate);
-  root.scale.setScalar(opts.scale ?? 1);
+  // root group so we can rotate VISUAL only once (fix facing)
+  const root = new THREE.Group();
+
+  const visual = SkeletonUtils.clone(soldierTemplate);
+  visual.rotation.y = ENEMY_VISUAL_Y_FIX;
+  root.add(visual);
 
   const collider = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.45, 0.9, 4, 8),
@@ -436,11 +433,6 @@ function makeEnemy(opts) {
   );
   collider.position.set(0, 1.1, 0);
   root.add(collider);
-
-  const mixer = new THREE.AnimationMixer(root);
-  const run = findClip(soldierClips, ["Run", "run", "Running"]);
-  const idle = findClip(soldierClips, ["Idle", "idle"]);
-  (run ? mixer.clipAction(run) : mixer.clipAction(idle)).play();
 
   // pistol prop
   const pistol = new THREE.Mesh(
@@ -450,16 +442,26 @@ function makeEnemy(opts) {
   pistol.position.set(0.22, 1.05, 0.20);
   root.add(pistol);
 
+  const mixer = new THREE.AnimationMixer(visual);
+  const run = findClip(soldierClips, ["Run", "run", "Running"]);
+  const idle = findClip(soldierClips, ["Idle", "idle"]);
+  const act = run ? mixer.clipAction(run) : (idle ? mixer.clipAction(idle) : null);
+  if (act) act.play();
+
   const e = {
-    root, collider, mixer,
-    hp: opts.hp ?? 8,
-    speed: opts.speed ?? 2.0,
+    root,
+    visual,
+    collider,
+    mixer,
+    hp: opts.hp ?? 10,
+    speed: opts.speed ?? 2.2,
     isBoss: !!opts.isBoss,
     shootEvery: opts.shootEvery ?? 1.0,
-    shootCD: 0.3 + Math.random() * 0.7,
-    shootRange: opts.shootRange ?? 55,
+    shootCD: 0.4 + Math.random() * 0.7,
+    shootRange: opts.shootRange ?? 70,
     damage: opts.damage ?? 6
   };
+
   collider.userData.owner = e;
 
   scene.add(root);
@@ -477,33 +479,33 @@ function clearEnemies() {
 function spawnWave() {
   clearEnemies();
 
+  // boss
   const boss = makeEnemy({
     isBoss: true,
-    hp: 60 + wave * 15,
-    speed: 1.7 + wave * 0.03,
-    shootEvery: Math.max(0.35, 0.70 - wave * 0.02),
-    shootRange: 85,
-    damage: 9,
-    scale: 1.4
+    hp: 70 + wave * 14,
+    speed: 1.8 + wave * 0.02,
+    shootEvery: Math.max(0.35, 0.75 - wave * 0.02),
+    shootRange: 95,
+    damage: 9
   });
-  boss.root.position.set(0, 0, -90);
+  boss.root.position.set(0, 0, -110);
 
+  // minions
   const minCount = Math.min(10, 6 + Math.floor(wave / 2));
   for (let i = 0; i < minCount; i++) {
     const a = Math.random() * Math.PI * 2;
-    const r = 70 + Math.random() * 55;
+    const r = 85 + Math.random() * 60;
     const m = makeEnemy({
-      hp: 10 + Math.floor(wave / 2),
-      speed: 2.4 + wave * 0.02,
-      shootEvery: Math.max(0.60, 1.15 - wave * 0.03),
-      shootRange: 70,
-      damage: 6,
-      scale: 1.0
+      hp: 12 + Math.floor(wave / 2),
+      speed: 2.5 + wave * 0.02,
+      shootEvery: Math.max(0.6, 1.15 - wave * 0.03),
+      shootRange: 80,
+      damage: 6
     });
     m.root.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
   }
 
-  // cap enemies (prevents lag)
+  // cap enemies
   while (enemies.length > MAX_ENEMIES) {
     const e = enemies.pop();
     scene.remove(e.root);
@@ -523,23 +525,37 @@ function hasLineOfSight(from, to) {
   return hits[0].distance > dist - 0.2;
 }
 
-// tracers
+// tracers pool
 const tracers = [];
-function tracer(from, to, color = 0xffc46b) {
-  if (tracers.length >= MAX_TRACERS) return;
-  const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
+function makeTracer() {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(6);
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.9 });
   const line = new THREE.Line(geo, mat);
+  line.visible = false;
   scene.add(line);
-  tracers.push({ line, t: 0.06 });
+  return { line, t: 0 };
 }
+for (let i = 0; i < MAX_TRACERS; i++) tracers.push(makeTracer());
+
+function showTracer(from, to, color = 0xffc46b) {
+  const t = tracers.find((x) => !x.line.visible);
+  if (!t) return;
+  t.line.material.color.setHex(color);
+  const attr = t.line.geometry.getAttribute("position");
+  attr.setXYZ(0, from.x, from.y, from.z);
+  attr.setXYZ(1, to.x, to.y, to.z);
+  attr.needsUpdate = true;
+  t.t = 0.06;
+  t.line.visible = true;
+}
+
 function updateTracers(dt) {
-  for (let i = tracers.length - 1; i >= 0; i--) {
-    tracers[i].t -= dt;
-    if (tracers[i].t <= 0) {
-      scene.remove(tracers[i].line);
-      tracers.splice(i, 1);
-    }
+  for (const t of tracers) {
+    if (!t.line.visible) continue;
+    t.t -= dt;
+    if (t.t <= 0) t.line.visible = false;
   }
 }
 
@@ -549,7 +565,7 @@ function updateEnemies(dt) {
   for (const e of enemies) {
     e.mixer.update(dt);
 
-    // move to fight range
+    // move toward player to “fight distance”
     const toPlayer = new THREE.Vector3(
       camera.position.x - e.root.position.x,
       0,
@@ -558,22 +574,20 @@ function updateEnemies(dt) {
     const dist = toPlayer.length();
     if (dist > 0.0001) toPlayer.normalize();
 
-    const stop = e.isBoss ? 40 : 30;
+    const stop = e.isBoss ? 55 : 40;
     if (dist > stop) e.root.position.addScaledVector(toPlayer, e.speed * dt);
 
-    // face player (fix facing)
+    // face player (visual already fixed)
     e.root.lookAt(camera.position.x, e.root.position.y, camera.position.z);
-    e.root.rotation.y += ENEMY_Y_FIX;
 
-    // shoot (not every frame)
+    // shoot
     e.shootCD = Math.max(0, e.shootCD - dt);
     if (e.shootCD === 0 && dist < e.shootRange) {
       const muzzle = new THREE.Vector3(e.root.position.x, 1.2, e.root.position.z);
       const target = camera.position.clone();
       if (hasLineOfSight(muzzle, target)) {
-        tracer(muzzle, target, e.isBoss ? 0xff6b6b : 0xffc46b);
-        playerHP -= e.damage;
-        if (playerHP < 0) playerHP = 0;
+        showTracer(muzzle, target, e.isBoss ? 0xff6b6b : 0xffc46b);
+        playerHP = Math.max(0, playerHP - e.damage);
       }
       e.shootCD = e.shootEvery;
     }
@@ -582,22 +596,22 @@ function updateEnemies(dt) {
     e.root.position.z = THREE.MathUtils.clamp(e.root.position.z, -MAP_HALF, MAP_HALF);
   }
 
-  // wave progression with timer (prevents rapid looping)
-  const bossAlive = enemies.some((e) => e.isBoss);
+  // wave progression (no instant looping)
+  const bossAlive = enemies.some((x) => x.isBoss);
   if (!bossAlive) {
-    nextWaveIn = Math.max(0, nextWaveIn - dt);
-    if (nextWaveIn === 0) {
+    waveCooldown = Math.max(0, waveCooldown - dt);
+    if (waveCooldown === 0) {
       wave += 1;
-      nextWaveIn = 4.0;
+      waveCooldown = 2.5;
       spawnWave();
     }
   } else {
-    nextWaveIn = 4.0;
+    waveCooldown = 2.5;
   }
 }
 
-// ---------------- PLAYER SHOOT ----------------
-function randSpread(spread) { return (Math.random() * 2 - 1) * spread; }
+// ---------------- PLAYER HITS (raycast) ----------------
+function randSpread(s) { return (Math.random() * 2 - 1) * s; }
 
 function fireHitscan(w) {
   const colliders = enemies.map((e) => e.collider);
@@ -633,14 +647,13 @@ function fireHitscan(w) {
   }
 }
 
-// ---------------- LOAD ----------------
+// ---------------- LOAD MODEL ----------------
 function loadGLB(url) {
   const loader = new GLTFLoader();
   return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
 }
 
 let ready = false;
-
 infoEl.textContent = "Loading...";
 
 loadGLB("https://threejs.org/examples/models/gltf/Soldier.glb")
@@ -657,30 +670,34 @@ loadGLB("https://threejs.org/examples/models/gltf/Soldier.glb")
     infoEl.textContent = "Model load failed. Open Console (F12).";
   });
 
-// ---------------- LOOP ----------------
+// ---------------- LOOP (with crash guard) ----------------
 function updateHUD() {
   const adsText = ads ? " ADS" : "";
   const reloadText = reloading ? " (reloading)" : "";
   healthEl.textContent = `HP: ${playerHP} | ${weapon.name}${adsText} ${ammoInMag}/${ammoReserve}${reloadText}`;
-  if (!controls.isLocked) infoEl.textContent = "CLICK TO PLAY (mouse unlocked)";
+
+  if (!controls.isLocked && ready) infoEl.textContent = "CLICK TO PLAY (mouse unlocked)";
+  if (playerHP <= 0) infoEl.textContent = "You died. Refresh to restart.";
 }
 
 function animate() {
   requestAnimationFrame(animate);
-
-  // clamp dt so lag spikes don’t explode physics
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if (ready && playerHP > 0) {
-    updatePlayer(dt);
-    updateReload(dt);
-    updateFiring(dt);
-    updateEnemies(dt);
-    updateHUD();
+  try {
+    if (ready && playerHP > 0) {
+      updatePlayer(dt);
+      updateReload(dt);
+      updateFiring(dt);
+      updateEnemies(dt);
+      updateHUD();
+    }
+    updateTracers(dt);
+    renderer.render(scene, camera);
+  } catch (err) {
+    console.error("GAME LOOP CRASH:", err);
+    infoEl.textContent = "Crashed. Open Console (F12) and copy the red error.";
   }
-
-  updateTracers(dt);
-  composer.render();
 }
 animate();
 
@@ -689,6 +706,4 @@ addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  composer.setSize(innerWidth, innerHeight);
-  updateFXAA();
 });
